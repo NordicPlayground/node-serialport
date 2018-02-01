@@ -32,7 +32,7 @@ void ErrorCodeToString(const char* prefix, int errorCode, char *errorStr) {
     break;
   case ERROR_INVALID_PARAMETER:
     _snprintf_s(errorStr, ERROR_STRING_SIZE, _TRUNCATE, "%s: The parameter is incorrect", prefix);
-    break;      
+    break;
   default:
     _snprintf_s(errorStr, ERROR_STRING_SIZE, _TRUNCATE, "%s: Unknown error code %d", prefix, errorCode);
     break;
@@ -597,6 +597,94 @@ NAN_METHOD(List) {
   uv_queue_work(uv_default_loop(), req, EIO_List, (uv_after_work_cb)EIO_AfterList);
 }
 
+#include <sstream>
+#define MAX_KEY_LENGTH 1000
+#define MAX_VALUE_NAME 1000
+
+
+#include <iostream>
+#include <fstream>
+using namespace std;
+
+void mylog (const char *logtext) {
+  std::ofstream myfile;
+  myfile.open ("example.txt", ios::out | ios::app);
+  if (logtext == NULL) {
+    myfile << "EMPTY" << std::endl;
+  }
+  else {
+    myfile << logtext << std::endl;
+  }
+  myfile.close();
+}
+
+std::string getSerialNumber(const char *vid, const char *pid) {
+  mylog("1");
+
+  if (vid == NULL || pid == NULL) {
+    return std::string();
+  }
+
+  std::ostringstream lookupKeyStream;
+
+  lookupKeyStream << "SYSTEM\\CurrentControlSet\\Enum\\USB\\" << "VID_" << vid << "&PID_" << pid;
+  mylog("2");
+
+  const std::string lookupKey = lookupKeyStream.str();
+  mylog("3");
+
+  mylog(lookupKey.c_str());
+  HKEY key;
+  HKEY innerKey;
+
+  if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, lookupKey.c_str(), 0, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key) == ERROR_SUCCESS) {
+    TCHAR    achKey[MAX_KEY_LENGTH];   // buffer for subkey name
+    DWORD    cSubKeys = 0;               // number of subkeys
+
+    DWORD retCode;
+
+    DWORD cchValue = MAX_VALUE_NAME;
+
+    retCode = RegQueryInfoKey(
+        key,                    // key handle
+        NULL,                // buffer for class name
+        NULL,           // size of class string
+        NULL,                    // reserved
+        &cSubKeys,               // number of subkeys
+        NULL,            // longest subkey size
+        NULL,            // longest class string
+        NULL,                // number of values for this key
+        NULL,            // longest value name
+        NULL,         // longest value data
+        NULL,   // security descriptor
+        NULL);       // last write time
+
+
+    if (cSubKeys)
+    {
+      DWORD cbName = MAX_KEY_LENGTH;
+      retCode = RegEnumKeyEx(key,
+                              0,
+                              achKey,
+                              &cbName,
+                              NULL,
+                              NULL,
+                              NULL,
+                              NULL);
+      RegCloseKey(innerKey);
+      RegCloseKey(key);
+      mylog(achKey);
+      return std::string(achKey);
+    }
+
+    /* In case we did not obtain the path, for whatever reason, we close the key. */
+    RegCloseKey(innerKey);
+    RegCloseKey(key);
+  }
+
+  return std::string();
+}
+
 void EIO_List(uv_work_t* req) {
   ListBaton* data = static_cast<ListBaton*>(req->data);
 
@@ -613,6 +701,7 @@ void EIO_List(uv_work_t* req) {
   char *name;
   char *manufacturer;
   char *locationId;
+  std::string serialNumber;
   bool isCom;
   while (true) {
     pnpId = NULL;
@@ -621,6 +710,7 @@ void EIO_List(uv_work_t* req) {
     name = NULL;
     manufacturer = NULL;
     locationId = NULL;
+    serialNumber.clear();
 
     ZeroMemory(&deviceInfoData, sizeof(SP_DEVINFO_DATA));
     deviceInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
@@ -646,6 +736,11 @@ void EIO_List(uv_work_t* req) {
       productId += 4;
       productId = copySubstring(productId, 4);
     }
+
+    mylog("Before serialnumber");
+    serialNumber = getSerialNumber(vendorId, productId);
+    mylog("After serialnumber");
+    mylog(serialNumber.c_str());
 
     if (SetupDiGetDeviceRegistryProperty(hDevInfo, &deviceInfoData, SPDRP_LOCATION_INFORMATION, &dwPropertyRegDataType, (BYTE*)szBuffer, sizeof(szBuffer), &dwSize)) {
       locationId = strdup(szBuffer);
@@ -674,6 +769,7 @@ void EIO_List(uv_work_t* req) {
       if (productId) {
         resultItem->productId = productId;
       }
+      resultItem->serialNumber = serialNumber;
       if (locationId) {
         resultItem->locationId = locationId;
       }
@@ -721,6 +817,7 @@ void EIO_AfterList(uv_work_t* req) {
       setIfNotEmpty(item, "comName", (*it)->comName.c_str());
       setIfNotEmpty(item, "manufacturer", (*it)->manufacturer.c_str());
       setIfNotEmpty(item, "serialNumber", (*it)->serialNumber.c_str());
+      setIfNotEmpty(item, "serialNumber2", (*it)->serialNumber.c_str());
       setIfNotEmpty(item, "pnpId", (*it)->pnpId.c_str());
       setIfNotEmpty(item, "locationId", (*it)->locationId.c_str());
       setIfNotEmpty(item, "vendorId", (*it)->vendorId.c_str());
