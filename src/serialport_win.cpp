@@ -817,7 +817,6 @@ void EIO_AfterList(uv_work_t* req) {
       setIfNotEmpty(item, "comName", (*it)->comName.c_str());
       setIfNotEmpty(item, "manufacturer", (*it)->manufacturer.c_str());
       setIfNotEmpty(item, "serialNumber", (*it)->serialNumber.c_str());
-      setIfNotEmpty(item, "serialNumber2", (*it)->serialNumber.c_str());
       setIfNotEmpty(item, "pnpId", (*it)->pnpId.c_str());
       setIfNotEmpty(item, "locationId", (*it)->locationId.c_str());
       setIfNotEmpty(item, "vendorId", (*it)->vendorId.c_str());
