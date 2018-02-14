@@ -6,8 +6,14 @@
 #include <string.h>
 #include <windows.h>
 #include <Setupapi.h>
+#include <initguid.h>
+#include <devpkey.h>
 #include <devguid.h>
 #pragma comment (lib, "setupapi.lib")
+// #pragma comment (lib, "devpkey.lib")
+// #pragma comment(lib, "uuid.lib")
+
+#define ARRAY_SIZE(arr)     (sizeof(arr)/sizeof(arr[0]))
 
 #define MAX_BUFFER_SIZE 1000
 
@@ -603,23 +609,26 @@ NAN_METHOD(List) {
 
 
 #include <iostream>
-#include <fstream>
+// #include <fstream>
 using namespace std;
 
-void mylog (const char *logtext) {
-  std::ofstream myfile;
-  myfile.open ("example.txt", ios::out | ios::app);
-  if (logtext == NULL) {
-    myfile << "EMPTY" << std::endl;
-  }
-  else {
-    myfile << logtext << std::endl;
-  }
-  myfile.close();
-}
+// void mylog (const char *logtext) {
+  // std::ofstream myfile;
+  // myfile.open ("example.txt", ios::out | ios::app);
+  // if (logtext == NULL) {
+    // myfile << "EMPTY" << std::endl;
+  // }
+  // else {
+    // myfile << logtext << std::endl;
+  // }
+  // printf("%s\n", logtext);
+  // myfile.close();
+// }
 
-std::string getSerialNumber(const char *vid, const char *pid) {
-  mylog("1");
+// It's possible that the s/n is a construct and not the s/n of the parent USB 
+// composite device. Perform some registry lookups to fetch the USB s/n.
+std::string getSerialNumber(const char *vid, const char *pid, const WCHAR* containerUuid) {
+  //mylog("getSerialNumber(%s, %s)"); mylog(vid); mylog(pid);
 
   if (vid == NULL || pid == NULL) {
     return std::string();
@@ -628,57 +637,100 @@ std::string getSerialNumber(const char *vid, const char *pid) {
   std::ostringstream lookupKeyStream;
 
   lookupKeyStream << "SYSTEM\\CurrentControlSet\\Enum\\USB\\" << "VID_" << vid << "&PID_" << pid;
-  mylog("2");
+  // mylog("2");
 
   const std::string lookupKey = lookupKeyStream.str();
-  mylog("3");
-
-  mylog(lookupKey.c_str());
+  // mylog("3");
+  printf("Gonna iterate through all subkeys in %s\n", lookupKey.c_str());
+    
+  //mylog(lookupKey.c_str());
   HKEY key;
-  HKEY innerKey;
 
   if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, lookupKey.c_str(), 0, KEY_QUERY_VALUE | KEY_ENUMERATE_SUB_KEYS, &key) == ERROR_SUCCESS) {
     TCHAR    achKey[MAX_KEY_LENGTH];   // buffer for subkey name
-    DWORD    cSubKeys = 0;               // number of subkeys
+    DWORD    cSubKeys = 0;             // number of subkeys
 
     DWORD retCode;
-
+  
     DWORD cchValue = MAX_VALUE_NAME;
 
     retCode = RegQueryInfoKey(
-        key,                    // key handle
-        NULL,                // buffer for class name
-        NULL,           // size of class string
-        NULL,                    // reserved
-        &cSubKeys,               // number of subkeys
-        NULL,            // longest subkey size
-        NULL,            // longest class string
-        NULL,                // number of values for this key
-        NULL,            // longest value name
-        NULL,         // longest value data
-        NULL,   // security descriptor
-        NULL);       // last write time
+        key,       // key handle
+        NULL,      // buffer for class name
+        NULL,      // size of class string
+        NULL,      // reserved
+        &cSubKeys, // number of subkeys
+        NULL,      // longest subkey size
+        NULL,      // longest class string
+        NULL,      // number of values for this key
+        NULL,      // longest value name
+        NULL,      // longest value data
+        NULL,      // security descriptor
+        NULL);     // last write time
 
 
-    if (cSubKeys)
+    if (retCode == ERROR_SUCCESS && cSubKeys)
     {
-      DWORD cbName = MAX_KEY_LENGTH;
-      retCode = RegEnumKeyEx(key,
-                              0,
-                              achKey,
-                              &cbName,
-                              NULL,
-                              NULL,
-                              NULL,
-                              NULL);
-      RegCloseKey(innerKey);
-      RegCloseKey(key);
-      mylog(achKey);
-      return std::string(achKey);
+        // Each of the keys here is the serial number of a USB device with the 
+        // given VendorId/ProductId
+        for (unsigned int i=0; i<cSubKeys; i++) {
+          DWORD cbName = MAX_KEY_LENGTH;
+          retCode = RegEnumKeyEx(key,
+                                  i,
+                                  achKey,
+                                  &cbName,
+                                  NULL,
+                                  NULL,
+                                  NULL,
+                                  NULL);
+          //RegCloseKey(innerKey);
+          
+          if (retCode == ERROR_SUCCESS) {
+            printf("Iterating through key %d - %s\n", i, achKey);
+
+            // Lookup SYSTEM\\CurrentControlSet\\Enum\\USB\\VID_(XXXX)&PID_(XXXX)\\(achKey)\\ContainerId 
+            // and see if that matches the ContainerId we're looking for
+            std::ostringstream lookupInnerKeyStream;
+
+            lookupInnerKeyStream << "SYSTEM\\CurrentControlSet\\Enum\\USB\\" << "VID_" << vid << "&PID_" << pid << "\\" << achKey;
+            const std::string lookupSubKey = lookupInnerKeyStream.str();
+
+            printf("Looking up registry key %s\n", lookupSubKey.c_str());
+            
+            HKEY innerKey;
+            if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, lookupSubKey.c_str(), 0, KEY_READ, &innerKey) == ERROR_SUCCESS) {
+                    
+                char szBuffer[400];
+                DWORD dwSize = sizeof(szBuffer);
+  
+                //RegQueryValue(innerKey, "ContainerId")
+                    
+                std::string r("ContainerID");
+                DWORD retCode2 = RegQueryValueEx(innerKey, r.c_str(), NULL, NULL, (LPBYTE)&szBuffer, &dwSize);
+                if ( retCode2 == ERROR_SUCCESS) {
+                    szBuffer[dwSize] = '\0';
+                    // name = strdup(szBuffer);
+                    // isCom = strstr(szBuffer, "COM") != NULL;
+                    printf("Got: %s (vs %ws)\n", szBuffer, containerUuid);
+                } else {
+                    printf("Error while querying: %d\n", retCode2);
+                }
+            }
+            RegCloseKey(innerKey);
+          }   
+          
+
+
+          
+          
+          
+          
+          //mylog(achKey);
+          //return std::string(achKey);
+        }
     }
 
     /* In case we did not obtain the path, for whatever reason, we close the key. */
-    RegCloseKey(innerKey);
     RegCloseKey(key);
   }
 
@@ -695,6 +747,9 @@ void EIO_List(uv_work_t* req) {
   int memberIndex = 0;
   DWORD dwSize, dwPropertyRegDataType;
   char szBuffer[400];
+  WCHAR szWUuidBuffer[400];
+  WCHAR szWBuffer[4096];
+
   char *pnpId;
   char *vendorId;
   char *productId;
@@ -724,8 +779,8 @@ void EIO_List(uv_work_t* req) {
     dwSize = sizeof(szBuffer);
     SetupDiGetDeviceInstanceId(hDevInfo, &deviceInfoData, szBuffer, dwSize, &dwSize);
     szBuffer[dwSize] = '\0';
-    pnpId = strdup(szBuffer);
-
+    pnpId = strdup(szBuffer); 
+    
     vendorId = strstr(szBuffer, "VID_");
     if (vendorId) {
       vendorId += 4;
@@ -737,10 +792,93 @@ void EIO_List(uv_work_t* req) {
       productId = copySubstring(productId, 4);
     }
 
-    mylog("Before serialnumber");
-    serialNumber = getSerialNumber(vendorId, productId);
-    mylog("After serialnumber");
-    mylog(serialNumber.c_str());
+    // Fetch the "Container ID" for this device node. In USB context, this "Container
+    // ID" refers to the composite USB device, i.e. the USB device as a whole, not
+    // just one of its interfaces with a serial port driver attached.
+    
+    //SetupDiGetDeviceProperty() and DEVPKEY_Device_ContainerId
+    // if (SetupDiGetDeviceProperty(hDevInfo, &deviceInfoData, DEVPKEY_Device_ContainerId, &dwPropertyRegDataType, (BYTE*)szBuffer, sizeof(szBuffer), &dwSize)) {
+      // locationId = strdup(szBuffer);
+    // }
+    
+
+    // From https://stackoverflow.com/questions/3438366/setupdigetdeviceproperty-usage-example:
+    DEVPROPTYPE ulPropertyType;
+    typedef BOOL (WINAPI *FN_SetupDiGetDevicePropertyW)(
+      __in       HDEVINFO DeviceInfoSet,
+      __in       PSP_DEVINFO_DATA DeviceInfoData,
+      __in       const DEVPROPKEY *PropertyKey,
+      __out      DEVPROPTYPE *PropertyType,
+      __out_opt  PBYTE PropertyBuffer,
+      __in       DWORD PropertyBufferSize,
+      __out_opt  PDWORD RequiredSize,
+      __in       DWORD Flags
+    );
+    FN_SetupDiGetDevicePropertyW fn_SetupDiGetDevicePropertyW = (FN_SetupDiGetDevicePropertyW)
+        GetProcAddress (GetModuleHandle (TEXT("Setupapi.dll")), "SetupDiGetDevicePropertyW");
+        
+    // Retreive the device description as reported by the device itself
+    // On Vista and earlier, we can use only SPDRP_DEVICEDESC
+    // On Windows 7, the information we want ("Bus reported device description") is
+    // accessed through DEVPKEY_Device_BusReportedDeviceDesc
+    // if (fn_SetupDiGetDevicePropertyW (hDevInfo, &deviceInfoData, &DEVPKEY_Device_BusReportedDeviceDesc,
+              // &ulPropertyType, (BYTE*)szWBuffer, sizeof(szWBuffer), &dwSize, 0)) {
+                  
+        // szWBuffer[dwSize] = '\0';
+
+        // printf ("    Got BusReportedDeviceDesc: \"%s\"\n", szBuffer);
+              
+              
+        // if (SetupDiGetDeviceProperty (hDevInfo, &DeviceInfoData, &DEVPKEY_Device_BusReportedDeviceDesc,
+                                          // &ulPropertyType, (BYTE*)szBuffer, sizeof(szBuffer), &dwSize, 0))
+            // _tprintf (TEXT("    Bus Reported Device Description: \"%ls\"\n"), szBuffer);
+        // if (SetupDiGetDeviceProperty (hDevInfo, &DeviceInfoData, &DEVPKEY_Device_Manufacturer,
+                                          // &ulPropertyType, (BYTE*)szBuffer, sizeof(szBuffer), &dwSize, 0)) {
+            // _tprintf (TEXT("    Device Manufacturer: \"%ls\"\n"), szBuffer);
+        // }
+        // if (SetupDiGetDeviceProperty (hDevInfo, &DeviceInfoData, &DEVPKEY_Device_FriendlyName,
+                                          // &ulPropertyType, (BYTE*)szBuffer, sizeof(szBuffer), &dwSize, 0)) {
+            // _tprintf (TEXT("    Device Friendly Name: \"%ls\"\n"), szBuffer);
+        // }
+        // if (SetupDiGetDeviceProperty (hDevInfo, &DeviceInfoData, &DEVPKEY_Device_LocationInfo,
+                                          // &ulPropertyType, (BYTE*)szBuffer, sizeof(szBuffer), &dwSize, 0)) {
+            // _tprintf (TEXT("    Device Location Info: \"%ls\"\n"), szBuffer);
+        // }
+        // if (SetupDiGetDeviceProperty (hDevInfo, &DeviceInfoData, &DEVPKEY_Device_SecuritySDS,
+                                          // &ulPropertyType, (BYTE*)szBuffer, sizeof(szBuffer), &dwSize, 0)) {
+            // // See Security Descriptor Definition Language on MSDN
+            // // (http://msdn.microsoft.com/en-us/library/windows/desktop/aa379567(v=vs.85).aspx)
+            // _tprintf (TEXT("    Device Security Descriptor String: \"%ls\"\n"), szBuffer);
+        // }
+        
+        
+        // Fetch the "Container ID" of the device. See https://docs.microsoft.com/en-us/windows-hardware/drivers/install/container-ids
+        if (fn_SetupDiGetDevicePropertyW (hDevInfo, &deviceInfoData, &DEVPKEY_Device_ContainerId,
+                                        &ulPropertyType,(BYTE*)szWUuidBuffer, sizeof(szWUuidBuffer), &dwSize, 0)) {
+            szWUuidBuffer[dwSize] = '\0';
+
+            // printf ("    ContainerId: ");       
+            // for (unsigned int i = 0; i < dwSize; i++) {  printf("%02X", szWUuidBuffer[i]); }
+            // printf("\n");
+            
+            StringFromGUID2((REFGUID)szWUuidBuffer, szWBuffer, ARRAY_SIZE(szWBuffer));
+            printf ("    ContainerId: \"%ls\"\n", szWBuffer);
+
+            printf("Calling getSerialNumber(%s,%s,%ls)\n", vendorId, productId, szWBuffer);
+            
+            serialNumber = getSerialNumber(vendorId, productId, szWBuffer);
+        }
+        // if (SetupDiGetDeviceProperty (hDevInfo, &DeviceInfoData, &DEVPKEY_DeviceDisplay_Category,
+                                          // &ulPropertyType, (BYTE*)szBuffer, sizeof(szBuffer), &dwSize, 0))
+            // _tprintf (TEXT("    Device Display Category: \"%ls\"\n"), szBuffer);
+    // }    
+    
+    
+    
+    //printf("Naive s/n is %s\n", serialNumber.c_str());
+    // serialNumber = getSerialNumber(vendorId, productId, serialNumber);
+    //serialNumber = getSerialNumber(vendorId, productId);
+    //printf("After lookup, s/n is %s\n\n", serialNumber.c_str());
 
     if (SetupDiGetDeviceRegistryProperty(hDevInfo, &deviceInfoData, SPDRP_LOCATION_INFORMATION, &dwPropertyRegDataType, (BYTE*)szBuffer, sizeof(szBuffer), &dwSize)) {
       locationId = strdup(szBuffer);
